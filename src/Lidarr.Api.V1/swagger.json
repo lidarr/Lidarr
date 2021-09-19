@@ -4566,10 +4566,10 @@
       },
       "parameters": []
     },
-    "/api/v1/blacklist": {
+    "/api/v1/blocklist": {
       "get": {
         "tags": [
-          "Blacklist"
+          "Blocklist"
         ],
         "summary": "Warning: no annotated method found for this route",
         "description": "This route is not annotated.",
@@ -4587,10 +4587,10 @@
       },
       "parameters": []
     },
-    "/api/v1/blacklist/{id}": {
+    "/api/v1/blocklist/{id}": {
       "delete": {
         "tags": [
-          "Blacklist"
+          "Blocklist"
         ],
         "summary": "Warning: no annotated method found for this route",
         "description": "This route is not annotated.",
@@ -4610,7 +4610,7 @@
         {
           "name": "id",
           "in": "path",
-          "description": "ID of Blacklist Item",
+          "description": "ID of Blocklist Item",
           "required": true,
           "schema": {
             "type": "integer"
