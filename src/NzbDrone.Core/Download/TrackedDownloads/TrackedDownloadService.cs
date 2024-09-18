@@ -29,7 +29,6 @@ namespace NzbDrone.Core.Download.TrackedDownloads
 
     public class TrackedDownloadService : ITrackedDownloadService,
                                           IHandle<AlbumInfoRefreshedEvent>,
-                                          IHandle<AlbumAddedEvent>,
                                           IHandle<AlbumDeletedEvent>,
                                           IHandle<ArtistAddedEvent>,
                                           IHandle<ArtistsDeletedEvent>
