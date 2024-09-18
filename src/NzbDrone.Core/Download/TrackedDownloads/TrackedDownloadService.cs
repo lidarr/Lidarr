@@ -299,22 +299,6 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             }
         }
 
-        public void Handle(AlbumAddedEvent message)
-        {
-            var cachedItems = _cache.Values
-                .Where(t =>
-                    t.RemoteAlbum?.Albums == null ||
-                    t.RemoteAlbum.Albums.Any(a => a.ForeignAlbumId == message.Album.ForeignAlbumId))
-                .ToList();
-
-            if (cachedItems.Any())
-            {
-                cachedItems.ForEach(UpdateCachedItem);
-
-                _eventAggregator.PublishEvent(new TrackedDownloadRefreshedEvent(GetTrackedDownloads()));
-            }
-        }
-
         public void Handle(AlbumDeletedEvent message)
         {
             var cachedItems = _cache.Values
