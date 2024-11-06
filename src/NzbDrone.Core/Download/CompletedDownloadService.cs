@@ -63,8 +63,8 @@ namespace NzbDrone.Core.Download
 
             SetImportItem(trackedDownload);
 
-            // Only process tracked downloads that are still downloading
-            if (trackedDownload.State != TrackedDownloadState.Downloading)
+            // Only process tracked downloads that are still downloading or have been blocked for importing due to an issue with matching
+            if (trackedDownload.State != TrackedDownloadState.Downloading && trackedDownload.State != TrackedDownloadState.ImportBlocked)
             {
                 return;
             }
@@ -93,7 +93,9 @@ namespace NzbDrone.Core.Download
 
                 if (artist == null)
                 {
-                    trackedDownload.Warn("Artist name mismatch, automatic import is not possible.");
+                    trackedDownload.Warn("Artist name mismatch, automatic import is not possible. Check the download troubleshooting entry on the wiki for common causes.");
+                    SetStateToImportBlocked(trackedDownload);
+
                     return;
                 }
             }
@@ -113,6 +115,8 @@ namespace NzbDrone.Core.Download
             if (trackedDownload.RemoteAlbum == null)
             {
                 trackedDownload.Warn("Unable to parse download, automatic import is not possible.");
+                SetStateToImportBlocked(trackedDownload);
+
                 return;
             }
 
@@ -149,14 +153,11 @@ namespace NzbDrone.Core.Download
 
             var statusMessages = new List<TrackedDownloadStatusMessage>
                                  {
-                                    new TrackedDownloadStatusMessage("One or more albums expected in this release were not imported or missing", new List<string>())
+                                    new TrackedDownloadStatusMessage("One or more tracks expected in this release were not imported or missing from the release", new List<string>())
                                  };
 
             if (importResults.Any(c => c.Result != ImportResultType.Imported))
             {
-                // Mark as failed to prevent further attempts at processing
-                trackedDownload.State = TrackedDownloadState.ImportFailed;
-
                 statusMessages.AddRange(
                     importResults
                         .Where(v => v.Result != ImportResultType.Imported && v.ImportDecision.Item != null)
@@ -165,22 +166,23 @@ namespace NzbDrone.Core.Download
                             new TrackedDownloadStatusMessage(Path.GetFileName(v.ImportDecision.Item.Path),
                                 v.Errors)));
 
-                if (statusMessages.Any())
-                {
-                    trackedDownload.Warn(statusMessages.ToArray());
-                }
-
-                // Publish event to notify Album was imported incompelte
+                // Publish event to notify album was imported incomplete
                 _eventAggregator.PublishEvent(new AlbumImportIncompleteEvent(trackedDownload));
-                return;
+            }
+
+            if (statusMessages.Any())
+            {
+                trackedDownload.Warn(statusMessages.ToArray());
+                SetStateToImportBlocked(trackedDownload);
             }
         }
 
         public bool VerifyImport(TrackedDownload trackedDownload, List<ImportResult> importResults)
         {
-            var allTracksImported = importResults.All(c => c.Result == ImportResultType.Imported) ||
-                importResults.Count(c => c.Result == ImportResultType.Imported) >=
-                Math.Max(1, trackedDownload.RemoteAlbum.Albums.Sum(x => x.AlbumReleases.Value.Where(y => y.Monitored).Sum(z => z.TrackCount)));
+            var allTracksImported = importResults.Where(c => c.Result == ImportResultType.Imported)
+                                                   .SelectMany(c => c.ImportDecision.Item.Tracks)
+                                                   .Count() >= Math.Max(1,
+                                          trackedDownload.RemoteAlbum.Albums.Sum(x => x.AlbumReleases.Value.Where(y => y.Monitored).Sum(z => z.TrackCount)));
 
             if (allTracksImported)
             {
@@ -191,6 +193,10 @@ namespace NzbDrone.Core.Download
                 return true;
             }
 
+            var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
+                .OrderByDescending(h => h.Date)
+                .ToList();
+
             // Double check if all episodes were imported by checking the history if at least one
             // file was imported. This will allow the decision engine to reject already imported
             // episode files and still mark the download complete when all files are imported.
@@ -199,19 +205,14 @@ namespace NzbDrone.Core.Download
             // and an episode is removed, but later comes back with a different ID then Sonarr will treat it as incomplete.
             // Since imports should be relatively fast and these types of data changes are infrequent this should be quite
             // safe, but commenting for future benefit.
-            var atLeastOneEpisodeImported = importResults.Any(c => c.Result == ImportResultType.Imported);
-
-            var historyItems = _historyService.FindByDownloadId(trackedDownload.DownloadItem.DownloadId)
-                                              .OrderByDescending(h => h.Date)
-                                              .ToList();
-
+            var atLeastOneTrackImported = importResults.Any(c => c.Result == ImportResultType.Imported);
             var allTracksImportedInHistory = _trackedDownloadAlreadyImported.IsImported(trackedDownload, historyItems);
 
             if (allTracksImportedInHistory)
             {
                 // Log different error messages depending on the circumstances, but treat both as fully imported, because that's the reality.
                 // The second message shouldn't be logged in most cases, but continued reporting would indicate an ongoing issue.
-                if (atLeastOneEpisodeImported)
+                if (atLeastOneTrackImported)
                 {
                     _logger.Debug("All albums were imported in history for {0}", trackedDownload.DownloadItem.Title);
                 }
@@ -233,8 +234,13 @@ namespace NzbDrone.Core.Download
                 return true;
             }
 
-            _logger.Debug("Not all albums have been imported for {0}", trackedDownload.DownloadItem.Title);
+            _logger.Debug("Not all albums have been imported for the release '{0}'", trackedDownload.DownloadItem.Title);
             return false;
+        }
+
+        private void SetStateToImportBlocked(TrackedDownload trackedDownload)
+        {
+            trackedDownload.State = TrackedDownloadState.ImportBlocked;
         }
 
         private void SetImportItem(TrackedDownload trackedDownload)

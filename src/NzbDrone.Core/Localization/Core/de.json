@@ -784,7 +784,7 @@
     "DownloadImported": "Importiere herunterladen",
     "EditMetadata": "Metadaten bearbeiten",
     "ForNewImportsOnly": "Nur für neue Imports",
-    "ImportFailed": "Import fehlgeschlagen",
+    "ImportCompleteFailed": "Import fehlgeschlagen",
     "EndedOnly": "Nur abgeschlossene",
     "MassAlbumsCutoffUnmetWarning": "Bist du dir sicher, dass du nach allen '{0}' Alben suchen willst deren Schwelle nicht erreicht worden ist?",
     "SearchForAllMissingAlbumsConfirmationCount": "Bist du dir sicher, dass du nach allen '{0}' fehlenden Alben suchen willst?",

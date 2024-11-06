@@ -6,6 +6,7 @@ using NzbDrone.Common.Cache;
 using NzbDrone.Common.Extensions;
 using NzbDrone.Common.Serializer;
 using NzbDrone.Core.CustomFormats;
+using NzbDrone.Core.Download.Aggregation;
 using NzbDrone.Core.Download.History;
 using NzbDrone.Core.History;
 using NzbDrone.Core.Messaging.Events;
@@ -16,7 +17,7 @@ using NzbDrone.Core.Parser.Model;
 
 namespace NzbDrone.Core.Download.TrackedDownloads
 {
-    public interface ITrackedDownloadService : IHandle<AlbumDeletedEvent>
+    public interface ITrackedDownloadService
     {
         TrackedDownload Find(string downloadId);
         void StopTracking(string downloadId);
@@ -26,13 +27,17 @@ namespace NzbDrone.Core.Download.TrackedDownloads
         void UpdateTrackable(List<TrackedDownload> trackedDownloads);
     }
 
-    public class TrackedDownloadService : ITrackedDownloadService
+    public class TrackedDownloadService : ITrackedDownloadService,
+                                          IHandle<AlbumInfoRefreshedEvent>,
+                                          IHandle<AlbumDeletedEvent>,
+                                          IHandle<ArtistAddedEvent>,
+                                          IHandle<ArtistsDeletedEvent>
     {
         private readonly IParsingService _parsingService;
         private readonly IHistoryService _historyService;
         private readonly IEventAggregator _eventAggregator;
         private readonly IDownloadHistoryService _downloadHistoryService;
-        private readonly ITrackedDownloadAlreadyImported _trackedDownloadAlreadyImported;
+        private readonly IRemoteAlbumAggregationService _aggregationService;
         private readonly ICustomFormatCalculationService _formatCalculator;
         private readonly Logger _logger;
         private readonly ICached<TrackedDownload> _cache;
@@ -43,7 +48,7 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                                       ICustomFormatCalculationService formatCalculator,
                                       IEventAggregator eventAggregator,
                                       IDownloadHistoryService downloadHistoryService,
-                                      ITrackedDownloadAlreadyImported trackedDownloadAlreadyImported,
+                                      IRemoteAlbumAggregationService aggregationService,
                                       Logger logger)
         {
             _parsingService = parsingService;
@@ -51,8 +56,8 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             _cache = cacheManager.GetCache<TrackedDownload>(GetType());
             _formatCalculator = formatCalculator;
             _eventAggregator = eventAggregator;
-            _trackedDownloadAlreadyImported = trackedDownloadAlreadyImported;
             _downloadHistoryService = downloadHistoryService;
+            _aggregationService = aggregationService;
             _logger = logger;
         }
 
@@ -66,6 +71,8 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             var parsedAlbumInfo = Parser.Parser.ParseAlbumTitle(trackedDownload.DownloadItem.Title);
 
             trackedDownload.RemoteAlbum = parsedAlbumInfo == null ? null : _parsingService.Map(parsedAlbumInfo);
+
+            _aggregationService.Augment(trackedDownload.RemoteAlbum);
         }
 
         public void StopTracking(string downloadId)
@@ -190,9 +197,11 @@ namespace NzbDrone.Core.Download.TrackedDownloads
                     }
                 }
 
-                // Calculate custom formats
                 if (trackedDownload.RemoteAlbum != null)
                 {
+                    _aggregationService.Augment(trackedDownload.RemoteAlbum);
+
+                    // Calculate custom formats
                     trackedDownload.RemoteAlbum.CustomFormats = _formatCalculator.ParseCustomFormat(trackedDownload.RemoteAlbum, downloadItem.TotalSize);
                 }
 
@@ -264,18 +273,6 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             }
         }
 
-        public void Handle(AlbumDeletedEvent message)
-        {
-            var cachedItems = _cache.Values.Where(x => x.RemoteAlbum != null && x.RemoteAlbum.Albums.Any(a => a.Id == message.Album.Id)).ToList();
-
-            if (cachedItems.Any())
-            {
-                cachedItems.ForEach(UpdateCachedItem);
-
-                _eventAggregator.PublishEvent(new TrackedDownloadRefreshedEvent(GetTrackedDownloads()));
-            }
-        }
-
         public void Handle(AlbumInfoRefreshedEvent message)
         {
             var needsToUpdate = false;
@@ -301,12 +298,45 @@ namespace NzbDrone.Core.Download.TrackedDownloads
             }
         }
 
+        public void Handle(AlbumDeletedEvent message)
+        {
+            var cachedItems = _cache.Values
+                .Where(t =>
+                    t.RemoteAlbum?.Albums != null &&
+                    t.RemoteAlbum.Albums.Any(a => a.Id == message.Album.Id || a.ForeignAlbumId == message.Album.ForeignAlbumId))
+                .ToList();
+
+            if (cachedItems.Any())
+            {
+                cachedItems.ForEach(UpdateCachedItem);
+
+                _eventAggregator.PublishEvent(new TrackedDownloadRefreshedEvent(GetTrackedDownloads()));
+            }
+        }
+
+        public void Handle(ArtistAddedEvent message)
+        {
+            var cachedItems = _cache.Values
+                .Where(t =>
+                    t.RemoteAlbum?.Artist == null ||
+                    message.Artist?.ForeignArtistId == t.RemoteAlbum.Artist.ForeignArtistId)
+                .ToList();
+
+            if (cachedItems.Any())
+            {
+                cachedItems.ForEach(UpdateCachedItem);
+
+                _eventAggregator.PublishEvent(new TrackedDownloadRefreshedEvent(GetTrackedDownloads()));
+            }
+        }
+
         public void Handle(ArtistsDeletedEvent message)
         {
-            var cachedItems = _cache.Values.Where(t =>
-                                        t.RemoteAlbum?.Artist != null &&
-                                        message.Artists.Select(a => a.Id).Contains(t.RemoteAlbum.Artist.Id))
-                                    .ToList();
+            var cachedItems = _cache.Values
+                .Where(t =>
+                    t.RemoteAlbum?.Artist != null &&
+                    message.Artists.Any(a => a.Id == t.RemoteAlbum.Artist.Id || a.ForeignArtistId == t.RemoteAlbum.Artist.ForeignArtistId))
+                .ToList();
 
             if (cachedItems.Any())
             {
